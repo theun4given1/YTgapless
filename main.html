@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>YouTube Playlist Crossfade Player</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #playlist-container {
+      width: 30%;
+      padding: 20px;
+      overflow-y: auto;
+      border-right: 1px solid #ccc;
+      box-sizing: border-box;
+    }
+    #player-container {
+      width: 70%;
+      padding: 20px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    iframe {
+      width: 100%;
+      max-width: 640px;
+      height: 360px;
+      margin: 10px 0;
+    }
+    ul {
+      list-style-type: none;
+      padding: 0;
+    }
+    li {
+      margin: 5px 0;
+    }
+    input, button {
+      width: 100%;
+      margin: 5px 0;
+      padding: 8px;
+    }
+    #manual-fade {
+      margin: 10px 0;
+      padding: 10px 20px;
+    }
+    #start-playback {
+      width: 200px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="playlist-container">
+    <input type="text" id="playlist-url" placeholder="Enter YouTube Playlist URL" />
+    <button id="load-playlist">Load Playlist</button>
+    <button id="refresh-playlist">Refresh Playlist</button>
+    <ul id="playlist"></ul>
+  </div>
+
+  <div id="player-container">
+    <button id="start-playback">Play</button>
+    <div id="yt-player1"></div>
+    <button id="manual-fade">Manual Fade</button>
+    <div id="yt-player2"></div>
+  </div>
+
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script>
+    let apiKey = 'AIzaSyBBMVXieMK017klojTWlVnu9hIX3nRrUXo'; // Replace with your API key
+    let playlist = [];
+    let currentIndex = 0;
+    let player1, player2;
+    let isFading = false;
+    let activePlayer = 1;
+    let playlistId = null;
+
+    function extractPlaylistId(url) {
+      const match = url.match(/[?&]list=([^&]+)/);
+      return match ? match[1] : null;
+    }
+
+    async function fetchPlaylistItems(forceUpdate = false) {
+      if (!playlistId) return [];
+      const res = await fetch(
+        `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId=${playlistId}&key=${apiKey}`
+      );
+      const data = await res.json();
+      if (forceUpdate) {
+        playlist = data.items;
+        displayPlaylist(playlist);
+      }
+      return data.items;
+    }
+
+    function displayPlaylist(items) {
+      const playlistElement = document.getElementById('playlist');
+      playlistElement.innerHTML = '';
+      items.forEach((item, index) => {
+        const li = document.createElement('li');
+        li.textContent = `${index + 1}. ${item.snippet.title}`;
+        playlistElement.appendChild(li);
+      });
+    }
+
+    document.getElementById('load-playlist').addEventListener('click', async () => {
+      const url = document.getElementById('playlist-url').value;
+      playlistId = extractPlaylistId(url);
+      if (!playlistId) {
+        alert('Invalid playlist URL');
+        return;
+      }
+      playlist = await fetchPlaylistItems();
+      currentIndex = 0;
+      displayPlaylist(playlist);
+    });
+
+    document.getElementById('refresh-playlist').addEventListener('click', async () => {
+      if (!playlistId) return;
+      playlist = await fetchPlaylistItems(true);
+    });
+
+    document.getElementById('start-playback').addEventListener('click', () => {
+      if (playlist.length === 0) return;
+      currentIndex = 0;
+      activePlayer = 1;
+      playVideo(currentIndex, player1);
+    });
+
+    document.getElementById('manual-fade').addEventListener('click', () => {
+      if (isFading || currentIndex + 1 >= playlist.length) return;
+      triggerCrossfade();
+    });
+
+    function onYouTubeIframeAPIReady() {
+      player1 = new YT.Player('yt-player1', {
+        height: '360',
+        width: '640',
+        videoId: '',
+        events: {
+          onReady: () => console.log('Player 1 ready'),
+          onStateChange: onPlayerStateChange
+        }
+      });
+
+      player2 = new YT.Player('yt-player2', {
+        height: '360',
+        width: '640',
+        videoId: '',
+        events: {
+          onReady: () => console.log('Player 2 ready'),
+          onStateChange: onPlayerStateChange
+        }
+      });
+    }
+
+    function playVideo(index, player) {
+      const videoId = playlist[index].snippet.resourceId.videoId;
+      player.loadVideoById(videoId);
+      player.setVolume(100);
+      monitorTime();
+    }
+
+    function monitorTime() {
+      const player = activePlayer === 1 ? player1 : player2;
+      const interval = setInterval(() => {
+        if (player.getPlayerState() === YT.PlayerState.PLAYING) {
+          const timeLeft = player.getDuration() - player.getCurrentTime();
+          if (timeLeft <= 10 && !isFading) {
+            clearInterval(interval);
+            triggerCrossfade();
+          }
+        }
+      }, 1000);
+    }
+
+    async function triggerCrossfade() {
+      if (!playlistId) return;
+
+      // Refresh playlist on every transition
+      const updatedItems = await fetchPlaylistItems(true);
+
+      if (currentIndex + 1 >= updatedItems.length) return;
+      isFading = true;
+
+      const fromPlayer = activePlayer === 1 ? player1 : player2;
+      const toPlayer = activePlayer === 1 ? player2 : player1;
+
+      currentIndex++;
+      const nextVideoId = updatedItems[currentIndex].snippet.resourceId.videoId;
+      toPlayer.loadVideoById(nextVideoId);
+      toPlayer.setVolume(0);
+
+      let step = 0;
+      const interval = setInterval(() => {
+        const volFrom = Math.max(0, 100 - step * 10);
+        const volTo = Math.min(100, step * 10);
+        fromPlayer.setVolume(volFrom);
+        toPlayer.setVolume(volTo);
+        step++;
+        if (step > 10) {
+          clearInterval(interval);
+          fromPlayer.pauseVideo();
+          activePlayer = activePlayer === 1 ? 2 : 1;
+          isFading = false;
+          monitorTime();
+        }
+      }, 1000);
+    }
+
+    function onPlayerStateChange(event) {
+      // You can log state changes here if needed
+    }
+  </script>
+</body>
+</html>
